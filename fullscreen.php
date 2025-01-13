@@ -15,6 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $tag = $_POST['tag'] ?? '';
     $content = $_POST['content'] ?? '';
     $currentContent = $_POST['currentContent'] ?? '';
+    $x = $_POST['x'] ?? '';
+    $y = $_POST['y'] ?? '';
 
     if ($action === 'remove' && $tag) {
         $dom = new DOMDocument();
@@ -68,6 +70,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($dom->getElementsByTagName($tag) as $node) {
             if (trim($node->nodeValue) === trim($currentContent)) {
                 $node->nodeValue = $content;
+                break;
+            }
+        }
+
+        file_put_contents($filePath, $dom->saveHTML());
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    if ($action === 'updatePosition' && $tag && $x && $y) {
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(file_get_contents($filePath), LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+
+        foreach ($dom->getElementsByTagName($tag) as $node) {
+            if (trim($node->nodeValue) === trim($currentContent)) {
+                $node->setAttribute('style', "position: absolute; left: ${x}px; top: ${y}px;");
                 break;
             }
         }
@@ -314,6 +334,14 @@ libxml_clear_errors();
             background-color: rgba(0, 0, 0, 0.5);
             z-index: 1999;
         }
+
+        /* Highlighted Element */
+        .highlighted {
+            outline: 2px dashed red;
+            position: absolute;
+            cursor: move;
+            z-index: 9999;
+        }
     </style>
 </head>
 <body>
@@ -352,12 +380,13 @@ libxml_clear_errors();
             <?php foreach ($tags as $index => $tag): ?>
                 <?php if (in_array($tag['tag'], ['a', 'img', 'div', 'p', 'h1', 'h2'])): ?>
                     <li>
-                        <span class="element-name"><?= htmlspecialchars($tag['tag']) ?></span>
+                        <span class="element-name" onmousedown="startDrag(event, <?= $index ?>)"><?= htmlspecialchars($tag['tag']) ?></span>
                         <button class="menu-button" onclick="toggleMenu(<?= $index ?>)">⋮</button>
                         <div class="dropdown-menu" id="menu-<?= $index ?>">
                             <button onclick="convertToHyperlink('<?= htmlspecialchars($tag['tag']) ?>', '<?= htmlspecialchars($tag['content']) ?>')">Convert to Hyperlink</button>
                             <button onclick="changeContent('<?= htmlspecialchars($tag['tag']) ?>', '<?= htmlspecialchars($tag['content']) ?>')">Change Content</button>
                             <button onclick="removeElement('<?= htmlspecialchars($tag['tag']) ?>', '<?= htmlspecialchars($tag['content']) ?>')">Remove Element</button>
+                            <button onclick="changePosition('<?= htmlspecialchars($tag['tag']) ?>', '<?= htmlspecialchars($tag['content']) ?>')">Change Position</button>
                         </div>
                     </li>
                 <?php endif; ?>
@@ -370,6 +399,8 @@ libxml_clear_errors();
     <iframe src="pages/<?= htmlspecialchars($file) ?>?t=<?= time() ?>" id="iframe"></iframe>
 
     <script>
+        let draggedElement = null;
+
         function toggleMenu(index) {
             const menu = document.getElementById(`menu-${index}`);
             menu.classList.toggle('active');
@@ -506,6 +537,73 @@ libxml_clear_errors();
                     });
             }
         }
+
+        function changePosition(tag, content) {
+            const iframe = document.getElementById('iframe');
+            const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+
+            // Highlight the element inside the iframe
+            const element = Array.from(iframeDocument.getElementsByTagName(tag))
+                .find(el => el.textContent.trim() === content.trim());
+
+            if (element) {
+                element.style.position = 'absolute';
+                element.style.outline = '2px dashed red';
+                element.style.cursor = 'move';
+
+                // Enable dragging
+                element.addEventListener('mousedown', (event) => {
+                    event.preventDefault();
+
+                    const offsetX = event.clientX - element.offsetLeft;
+                    const offsetY = event.clientY - element.offsetTop;
+
+                    function mouseMoveHandler(e) {
+                        element.style.left = `${e.clientX - offsetX}px`;
+                        element.style.top = `${e.clientY - offsetY}px`;
+                    }
+
+                    function mouseUpHandler(e) {
+                        iframeDocument.removeEventListener('mousemove', mouseMoveHandler);
+                        iframeDocument.removeEventListener('mouseup', mouseUpHandler);
+
+                        // Save the new position
+                        const x = e.clientX - offsetX;
+                        const y = e.clientY - offsetY;
+
+                        fetch(window.location.href, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: `action=updatePosition&tag=${encodeURIComponent(tag)}&currentContent=${encodeURIComponent(content)}&x=${x}&y=${y}`,
+                        })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success) {
+                                    alert('Position updated successfully!');
+                                    window.location.reload();
+                                } else {
+                                    alert('Failed to update position.');
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error:', error);
+                                alert('An error occurred.');
+                            });
+
+                        element.style.outline = '';
+                        element.style.cursor = '';
+                    }
+
+                    iframeDocument.addEventListener('mousemove', mouseMoveHandler);
+                    iframeDocument.addEventListener('mouseup', mouseUpHandler);
+                });
+            } else {
+                alert('Element not found for repositioning.');
+            }
+        }
     </script>
 </body>
 </html>
+
